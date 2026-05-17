@@ -4,11 +4,18 @@ import pandas as pd
 import numpy as np
 import threading
 import time
+import shutil, os
+from datetime import datetime
+
+
+if os.path.exists('data/results.csv'):
+    ts = datetime.now().strftime('%Y%m%d%H%M%S')
+    shutil.copy('data/results.csv', f'data/results{ts}.csv')
 
 app = Flask(__name__)
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-MODEL = "nemotron-3-super:120b"
+MODEL = "nemotron3:33b"
 
 ROLL_FULL = "/home/asus/rocket_project/data/thesis/digitized/roll_angular_speed_black.csv"
 FINS_FULL = "/home/asus/rocket_project/data/thesis/digitized/fin_angular_velocity_red.csv"
@@ -108,38 +115,84 @@ def get_phase(t,alt,vel,cs,cg):
     elif alt>30: return "LANDING_BURN"
     else: return "TOUCHDOWN"
 
-def ask_nemotron(t, roll, alt, vel, conds, phase, goal, ce, cg, recent):
-    cond_str = ", ".join(conds) if conds else "none"
-    recent_str = recent[-1] if recent else "none"
-    prompt = f"""AutoClaw AI rocket controller. DGX Spark. Nemotron 120B.
-MISSION: {goal[:100]}
-T+{t:.0f}s | Alt:{alt:.0f}m | Vel:{vel:.0f}m/s | Roll:{roll:+.0f}deg/s | {phase}
-Coast:{ce:.0f}/{cg}s | Conditions:{cond_str}
-Last:{recent_str}
+SYSTEM_PROMPT = """You are AutoClaw, an AI rocket flight controller. Your goal is NOT to copy a PID controller — your goal is to BEAT it by reasoning smarter.
 
-ONLY respond:
-FIN_DEFLECTION: <-15 to 15>
-PHASE: <name>
-ANOMALY: <YES desc/NO>
-REASONING: <8 words max>
-STATUS: <ON_TRACK/WARNING/EMERGENCY>"""
+PHYSICS:
+- Roll rate in deg/s. Positive = clockwise spin viewed from behind.
+- Fin deflection range: -15 to +15 degrees.
+- To stop a POSITIVE roll: use NEGATIVE fin. To stop a NEGATIVE roll: use POSITIVE fin.
+- Proportional response: scale your correction to the severity of the roll.
+  - |roll| < 20 deg/s  -> small correction (1-3 deg)
+  - |roll| 20-60 deg/s -> medium correction (4-8 deg)
+  - |roll| > 60 deg/s  -> aggressive correction (9-15 deg)
+- DO NOT over-correct: a fin command that is too large causes oscillation.
+- If roll is already near zero and settling, reduce fin toward 0 to avoid inducing new spin.
+- React to the TREND: if roll is oscillating rapidly, dampen — don't fight each peak.
+
+YOUR EDGE OVER PID:
+- PID reacts mechanically. You reason about context.
+- Use phase: during POWERED_ASCENT react fast. During COAST, be gentle.
+- Use conditions: heavy crosswind needs more aggressive correction.
+- Anticipate: if roll just reversed sign, it may be rebounding — don't slam full deflection.
+
+RESPONSE FORMAT — follow exactly, no extra text:
+FIN_DEFLECTION: <number -15.0 to 15.0>
+ANOMALY: <YES or NO>
+REASONING: <one sentence explaining your reasoning>
+STATUS: <ON_TRACK or WARNING or CRITICAL>"""
+
+
+def ask_nemotron(t, roll, alt, vel, conds, phase, goal, ce, cg, recent, pid_fin=0.0):
+    import re
+    cond_str = ",".join(conds) if conds else "none"
+    recent_str = ", ".join(recent[-3:]) if recent else "none"
+    roll_trend = ""
+    if len(recent) >= 2:
+        try:
+            last_roll = float(recent[-1].split("roll=")[0].split()[-1] if "roll=" not in recent[-1] else "0")
+        except: last_roll = 0
+        if abs(roll) < abs(last_roll) * 0.7: roll_trend = " (SETTLING — roll reducing)"
+        elif abs(roll) > abs(last_roll) * 1.3: roll_trend = " (ESCALATING — roll increasing)"
+        else: roll_trend = " (OSCILLATING — roll changing direction)"
+
+    prompt = f"""{SYSTEM_PROMPT}
+
+CURRENT STATE:
+- Time: T+{t:.1f}s | Phase: {phase}
+- Roll rate: {roll:+.1f} deg/s{roll_trend}
+- Altitude: {alt:.0f}m | Conditions: {cond_str}
+- Recent AI decisions: [{recent_str}]
+
+What is your fin deflection command? Reason about the trend, not just the instant value."""
+
     try:
         t0 = time.time()
-        r = req.post(OLLAMA_URL,json={"model":MODEL,"prompt":prompt,"stream":False},timeout=20)
+        r = req.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "stream": False}, timeout=30)
         elapsed = time.time() - t0
-        text = r.json()["response"].strip()
-        result = {"fin":0.0,"phase":phase,"anomaly":"NO","reasoning":"...","status":"ON_TRACK","tps":round(len(text)/elapsed/4,1)}
+        text = r.json().get("response", "").strip()
+        # Strip <think> blocks from reasoning models
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        print(f"[AI T+{t:.0f}s] {repr(text[:100])}")
+        result = {"fin": pid_fin, "anomaly": "NO", "reasoning": "nominal", "status": "ON_TRACK",
+                  "tps": round(len(text) / max(elapsed, 0.1) / 4, 1)}
         for line in text.split('\n'):
-            if line.startswith('FIN_DEFLECTION:'):
-                try: result["fin"]=max(-15,min(15,float(line.split(':')[1].strip())))
+            line = line.strip()
+            if 'FIN_DEFLECTION' in line and ':' in line:
+                try:
+                    nums = re.findall(r'-?\d+\.?\d*', line.split(':',1)[1])
+                    if nums: result["fin"] = max(-15, min(15, float(nums[0])))
                 except: pass
-            elif line.startswith('PHASE:'): result["phase"]=line.split(':',1)[1].strip()
-            elif line.startswith('ANOMALY:'): result["anomaly"]=line.split(':',1)[1].strip()
-            elif line.startswith('REASONING:'): result["reasoning"]=line.split(':',1)[1].strip()
-            elif line.startswith('STATUS:'): result["status"]=line.split(':',1)[1].strip()
+            elif 'ANOMALY' in line and ':' in line:
+                result["anomaly"] = line.split(':',1)[1].strip()[:20]
+            elif 'REASONING' in line and ':' in line:
+                result["reasoning"] = line.split(':',1)[1].strip()[:200]
+            elif 'STATUS' in line and ':' in line:
+                result["status"] = line.split(':',1)[1].strip()[:20]
         return result
     except Exception as e:
-        return {"fin":0.0,"phase":phase,"anomaly":"NO","reasoning":f"Err:{str(e)[:20]}","status":"WARNING","tps":0}
+        print(f"[AI error] {e}")
+        return {"fin": pid_fin, "anomaly": "NO", "reasoning": f"Err:{str(e)[:20]}", "status": "WARNING", "tps": 0}
+
 
 def run_mission(mission):
     global state
@@ -156,7 +209,7 @@ def run_mission(mission):
         "events":[],"mission_result":"","mission_goal":goal
     })
     cs=None; recent=[]; ai_all=[]; pid_all=[]
-    key_times=(list(range(0,12,2))+list(range(15,min(80,coast_goal+12),6))+
+    key_times=(list(range(0,12,3))+list(range(15,min(80,coast_goal+12),10))+
                list(range(80,coast_goal+12,15))+list(range(coast_goal+12,coast_goal+100,5)))
     for (t,roll_r,pid_fin,alt_r,vel) in data:
         if not state["running"]: break
@@ -165,25 +218,25 @@ def run_mission(mission):
             cs=t; state["events"].append({"time":f"T+{t:.0f}s","type":"COAST_START","desc":"Entered coast phase"})
         ce=(t-cs) if cs else 0
         phase=get_phase(t,alt,vel,cs,coast_goal)
-        should_call=(any(abs(t-kt)<0.6 for kt in key_times) or abs(roll)>120 or len(active)>0)
+        should_call=(any(abs(t-kt)<0.6 for kt in key_times) or abs(roll)>150)
         if should_call:
-            res=ask_nemotron(t,roll,alt,vel,active,phase,goal,ce,coast_goal,recent)
+            res = ask_nemotron(t,roll,alt,vel,active,phase,goal,ce,coast_goal,recent,pid_fin)
             ai_fin=res["fin"]; reasoning=res["reasoning"]; status=res["status"]
             state["tokens_per_sec"]=res["tps"]
             recent.append(f"T+{t:.0f}s {phase} fin={ai_fin:+.0f}")
             if len(recent)>5: recent.pop(0)
-            if "YES" in res["anomaly"].upper():
-                state["events"].append({"time":f"T+{t:.0f}s","type":"ANOMALY","desc":res["anomaly"][:60]})
+            if "YES" in res.get("anomaly","NO").upper():
+                state["events"].append({"time":f"T+{t:.0f}s","type":"ANOMALY","desc":res.get("anomaly","")[:60]})
             state["decisions"].insert(0,{
                 "time":f"T+{t:.1f}s","roll":f"{roll:+.0f}","ai_fin":f"{ai_fin:+.1f}",
-                "pid_fin":f"{pid_fin:+.1f}","phase":phase,"reasoning":reasoning[:60],
+                "pid_fin":f"{pid_fin:+.1f}","phase":phase,"reasoning":reasoning[:200],
                 "status":status,"conditions":active[0][:35] if active else "",
                 "match":"✅" if abs(ai_fin-pid_fin)<4 else "⚠️"
             })
             if len(state["decisions"])>25: state["decisions"]=state["decisions"][:25]
             state["total_decisions"]+=1
         else:
-            ai_fin=pid_fin; status="ON_TRACK"; reasoning="Nominal"
+            ai_fin=pid_fin; reasoning="nominal"; status="ON_TRACK"
         ai_all.append(ai_fin); pid_all.append(pid_fin)
         state.update({
             "time":round(t,1),"roll_rate":round(roll,1),"altitude":round(alt,0),

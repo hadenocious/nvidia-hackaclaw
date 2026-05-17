@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoClaw — Mission Debrief</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600;700&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --bg:        #020408;
+    --panel:     #040d14;
+    --border:    #0a2a3a;
+    --glow:      #00e5ff;
+    --glow2:     #00ff88;
+    --danger:    #ff2244;
+    --warning:   #ffaa00;
+    --pid:       #4488ff;
+    --ai:        #00ff88;
+    --roll:      #ff3355;
+    --alt:       #ffcc00;
+    --text:      #c8e8f0;
+    --muted:     #3a6070;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  /* ── SCANLINE OVERLAY ── */
+  body::before {
+    content:'';
+    position:fixed; inset:0; z-index:999; pointer-events:none;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+  }
+
+  /* ── HEADER ── */
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 18px 40px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(90deg, #020408 0%, #030d18 50%, #020408 100%);
+    position:relative; overflow:hidden;
+  }
+  header::after {
+    content:'';
+    position:absolute; bottom:0; left:0; right:0; height:1px;
+    background: linear-gradient(90deg, transparent, var(--glow), transparent);
+    animation: scanH 3s linear infinite;
+  }
+  @keyframes scanH { 0%{opacity:0.3} 50%{opacity:1} 100%{opacity:0.3} }
+
+  .logo {
+    font-family: 'Orbitron', monospace;
+    font-size: 28px; font-weight:900; letter-spacing:4px;
+    color: var(--glow);
+    text-shadow: 0 0 20px var(--glow), 0 0 40px var(--glow);
+  }
+  .logo span { color: var(--glow2); }
+
+  .header-meta {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px; color: var(--muted);
+    text-align:right; line-height:1.8;
+  }
+  .header-meta em { color: var(--glow); font-style:normal; }
+
+  .status-pill {
+    display:inline-flex; align-items:center; gap:8px;
+    padding:6px 16px; border-radius:2px;
+    border:1px solid var(--glow2);
+    font-family:'Share Tech Mono',monospace; font-size:11px; color:var(--glow2);
+    box-shadow: 0 0 12px rgba(0,255,136,0.2);
+  }
+  .status-pill::before {
+    content:''; width:7px; height:7px; border-radius:50%;
+    background:var(--glow2);
+    box-shadow: 0 0 8px var(--glow2);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+
+  /* ── MAIN GRID ── */
+  .grid {
+    display:grid;
+    grid-template-columns: 1fr 420px;
+    grid-template-rows: 440px 1fr;
+    gap:1px;
+    background: var(--border);
+    height: calc(100vh - 69px);
+    min-height: 700px;
+  }
+
+  .panel {
+    background: var(--panel);
+    position:relative; overflow:hidden;
+  }
+
+  .panel-label {
+    position:absolute; top:14px; left:18px; z-index:10;
+    font-family:'Share Tech Mono',monospace; font-size:10px;
+    color:var(--muted); letter-spacing:3px; text-transform:uppercase;
+  }
+  .panel-label strong { color:var(--glow); display:block; font-size:13px; letter-spacing:2px; margin-bottom:2px; }
+
+  /* ── 3D ROCKET PANEL ── */
+  #rocket-panel {
+    grid-row: 1 / 3;
+    grid-column: 2;
+  }
+  #three-canvas { width:100%; height:100%; display:block; }
+
+  /* ── CHART PANELS ── */
+  #chart-top { grid-row:1; grid-column:1; }
+  #chart-bottom { grid-row:2; grid-column:1; display:flex; flex-direction:column; }
+
+  canvas.chart { width:100%; flex:1; }
+
+  /* ── METRICS BAR ── */
+  .metrics {
+    display:flex; gap:0;
+    border-top:1px solid var(--border);
+    height:56px; flex-shrink:0;
+  }
+  .metric {
+    flex:1; display:flex; flex-direction:column; justify-content:center;
+    padding:0 16px; border-right:1px solid var(--border);
+    position:relative; overflow:hidden;
+  }
+  .metric::before {
+    content:''; position:absolute; left:0; top:0; bottom:0; width:2px;
+  }
+  .metric.green::before  { background:var(--glow2); box-shadow:0 0 8px var(--glow2); }
+  .metric.cyan::before   { background:var(--glow);  box-shadow:0 0 8px var(--glow); }
+  .metric.red::before    { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+  .metric.yellow::before { background:var(--warning); box-shadow:0 0 8px var(--warning); }
+  .metric.blue::before   { background:var(--pid); box-shadow:0 0 8px var(--pid); }
+
+  .metric-label {
+    font-family:'Share Tech Mono',monospace; font-size:9px;
+    color:var(--muted); letter-spacing:2px; text-transform:uppercase; margin-bottom:2px;
+  }
+  .metric-value {
+    font-family:'Orbitron',monospace; font-size:16px; font-weight:700;
+    color:var(--text);
+  }
+  .metric.green .metric-value  { color:var(--glow2); text-shadow:0 0 10px var(--glow2); }
+  .metric.cyan .metric-value   { color:var(--glow);  text-shadow:0 0 10px var(--glow); }
+  .metric.red .metric-value    { color:var(--danger); text-shadow:0 0 10px var(--danger); }
+  .metric.yellow .metric-value { color:var(--warning); text-shadow:0 0 10px var(--warning); }
+  .metric.blue .metric-value   { color:var(--pid); text-shadow:0 0 10px var(--pid); }
+
+  /* ── PLAYBACK BAR ── */
+  .playback {
+    position:absolute; bottom:0; left:0; right:0; z-index:20;
+    display:flex; align-items:center; gap:12px; padding:10px 16px;
+    background: linear-gradient(0deg, rgba(2,4,8,0.95), transparent);
+  }
+  .play-btn {
+    width:32px; height:32px; border-radius:50%;
+    border:1px solid var(--glow); background:transparent;
+    color:var(--glow); font-size:14px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    transition:all 0.2s;
+  }
+  .play-btn:hover { background:var(--glow); color:var(--bg); }
+  .timeline {
+    flex:1; height:3px; background:var(--border); border-radius:2px;
+    position:relative; cursor:pointer;
+  }
+  .timeline-fill {
+    height:100%; background:linear-gradient(90deg, var(--glow2), var(--glow));
+    border-radius:2px; width:0%; transition:width 0.1s;
+    box-shadow:0 0 6px var(--glow);
+  }
+  .timeline-thumb {
+    position:absolute; top:50%; transform:translateY(-50%);
+    width:10px; height:10px; border-radius:50%;
+    background:var(--glow); box-shadow:0 0 8px var(--glow);
+    left:0%; margin-left:-5px; transition:left 0.1s;
+  }
+  .time-label {
+    font-family:'Share Tech Mono',monospace; font-size:11px; color:var(--muted);
+    white-space:nowrap;
+  }
+
+  /* ── CORNER DECORATIONS ── */
+  .corner {
+    position:absolute; width:20px; height:20px;
+    border-color:var(--glow); border-style:solid;
+    opacity:0.5;
+  }
+  .corner.tl { top:8px; left:8px; border-width:1px 0 0 1px; }
+  .corner.tr { top:8px; right:8px; border-width:1px 1px 0 0; }
+  .corner.bl { bottom:8px; left:8px; border-width:0 0 1px 1px; }
+  .corner.br { bottom:8px; right:8px; border-width:0 1px 1px 0; }
+
+  /* ── LOADING ── */
+  #loading {
+    position:fixed; inset:0; z-index:1000;
+    background:var(--bg); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:20px;
+  }
+  .load-title {
+    font-family:'Orbitron',monospace; font-size:36px; font-weight:900;
+    color:var(--glow); text-shadow:0 0 30px var(--glow);
+    animation: flicker 2s infinite;
+  }
+  @keyframes flicker { 0%,100%{opacity:1} 92%{opacity:1} 93%{opacity:0.4} 94%{opacity:1} 97%{opacity:0.8} }
+  .load-sub {
+    font-family:'Share Tech Mono',monospace; font-size:12px; color:var(--muted);
+    letter-spacing:4px;
+  }
+  .load-bar { width:280px; height:2px; background:var(--border); border-radius:1px; overflow:hidden; }
+  .load-fill { height:100%; background:linear-gradient(90deg,var(--glow2),var(--glow)); width:0%; animation:loadAnim 1.8s ease forwards; }
+  @keyframes loadAnim { to{width:100%} }
+
+  /* ── FILE INPUT ── */
+  #file-prompt {
+    display:none;
+    position:fixed; inset:0; z-index:1001;
+    background:var(--bg); flex-direction:column;
+    align-items:center; justify-content:center; gap:24px;
+  }
+  #file-prompt.show { display:flex; }
+  .file-drop {
+    width:380px; height:180px;
+    border:1px dashed var(--glow); border-radius:4px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px;
+    cursor:pointer; transition:all 0.2s; background:rgba(0,229,255,0.03);
+  }
+  .file-drop:hover { background:rgba(0,229,255,0.07); border-color:var(--glow2); }
+  .file-drop-icon { font-size:40px; }
+  .file-drop-text { font-family:'Share Tech Mono',monospace; font-size:12px; color:var(--muted); text-align:center; line-height:1.8; }
+  #csv-input { display:none; }
+  .use-demo-btn {
+    font-family:'Share Tech Mono',monospace; font-size:11px;
+    color:var(--muted); background:none; border:none; cursor:pointer; text-decoration:underline;
+  }
+  .use-demo-btn:hover { color:var(--glow2); }
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loading">
+  <div class="load-title">AUTOCLAW</div>
+  <div class="load-sub">MISSION DEBRIEF SYSTEM</div>
+  <div class="load-bar"><div class="load-fill"></div></div>
+</div>
+
+<!-- FILE PROMPT -->
+<div id="file-prompt">
+  <div style="font-family:'Orbitron',monospace;font-size:22px;color:var(--glow);letter-spacing:4px;">LOAD MISSION DATA</div>
+  <div class="file-drop" id="file-drop">
+    <div class="file-drop-icon">📡</div>
+    <div class="file-drop-text">Drop results.csv here<br>or click to select file<br><span style="color:var(--glow);font-size:10px;">~/rocket_project/data/results.csv</span></div>
+    <input type="file" id="csv-input" accept=".csv">
+  </div>
+  <button class="use-demo-btn" id="demo-btn">↗ Use demo data instead</button>
+</div>
+
+<!-- MAIN UI -->
+<header>
+  <div>
+    <div class="logo">AUTO<span>CLAW</span></div>
+    <div style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--muted);letter-spacing:2px;margin-top:4px;">AI ROCKET FLIGHT CONTROLLER · MISSION DEBRIEF</div>
+  </div>
+  <div class="status-pill" id="status-pill">MISSION COMPLETE</div>
+  <div class="header-meta">
+    NVIDIA Nemotron · <em>DGX Spark</em><br>
+    ASUS Ascent GX10 · <em id="hdr-model">nemotron3:33b</em><br>
+    <span id="hdr-time">—</span>
+  </div>
+</header>
+
+<div class="grid">
+
+  <!-- TOP: Roll + Fins -->
+  <div class="panel" id="chart-top">
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="panel-label"><strong>CONTROL SURFACE TELEMETRY</strong>Roll Rate & Fin Deflection</div>
+    <canvas id="chart1"></canvas>
+    <div class="playback">
+      <button class="play-btn" id="play-btn">▶</button>
+      <div class="timeline" id="timeline">
+        <div class="timeline-fill" id="tl-fill"></div>
+        <div class="timeline-thumb" id="tl-thumb"></div>
+      </div>
+      <span class="time-label" id="time-display">T+0.0s</span>
+    </div>
+  </div>
+
+  <!-- BOTTOM: Stats + Accuracy -->
+  <div class="panel" id="chart-bottom">
+    <div class="corner tl"></div><div class="corner br"></div>
+    <div class="panel-label" style="top:10px"><strong>PERFORMANCE ANALYSIS</strong>AI vs PID · Direction Accuracy</div>
+    <canvas id="chart2" style="margin-top:36px"></canvas>
+    <div class="metrics" id="metrics-bar">
+      <div class="metric green">
+        <div class="metric-label">Direction Acc.</div>
+        <div class="metric-value" id="m-dir">—</div>
+      </div>
+      <div class="metric blue">
+        <div class="metric-label">PID Agreement</div>
+        <div class="metric-value" id="m-pid">—</div>
+      </div>
+      <div class="metric red">
+        <div class="metric-label">Peak Roll</div>
+        <div class="metric-value" id="m-roll">—</div>
+      </div>
+      <div class="metric yellow">
+        <div class="metric-label">Avg AI Fin</div>
+        <div class="metric-value" id="m-fin">—</div>
+      </div>
+      <div class="metric cyan">
+        <div class="metric-label">Decisions</div>
+        <div class="metric-value" id="m-dec">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: 3D Rocket -->
+  <div class="panel" id="rocket-panel">
+    <div class="corner tl"></div><div class="corner br"></div>
+    <div class="panel-label"><strong>3D ATTITUDE</strong>Live Roll Visualization</div>
+    <canvas id="three-canvas"></canvas>
+  </div>
+
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════════════
+let flightData = [];
+let playhead = 0;
+let playing = false;
+let playInterval = null;
+
+function generateDemoData() {
+  const data = [];
+  // Simulate real flight data pattern
+  for (let t = 0; t <= 11; t += 0.1) {
+    const roll = t < 0.5 ? 0 :
+      t < 2 ? 180 * Math.sin(t * 8) * Math.exp(-t * 0.3) + (Math.random()-0.5)*40 :
+      t < 6 ? 15 * Math.sin(t * 2) + (Math.random()-0.5)*10 :
+      5 * Math.sin(t) + (Math.random()-0.5)*5;
+
+    const pid_fin = Math.max(-15, Math.min(15, -roll * 0.055 + (Math.random()-0.5)*1.5));
+    const ai_fin = Math.max(-15, Math.min(15,
+      -roll * 0.06 * (1 + 0.1*Math.random()) +
+      (Math.abs(roll) > 100 ? -Math.sign(roll) * 1.5 : 0)
+    ));
+
+    const alt = t <= 2 ? t * 80 : t <= 6 ? 160 + (t-2)*70 : Math.max(0, 440 - (t-6)*44);
+    const phase = t < 0.5 ? 'PRE_LAUNCH' : t < 2 ? 'POWERED_ASCENT' : t < 6 ? 'COAST_ASCENT' : t < 7 ? 'APOGEE' : t < 10 ? 'DESCENT' : 'LANDING';
+
+    data.push({ time: +t.toFixed(1), roll_rate: +roll.toFixed(1), ai_fin: +ai_fin.toFixed(1), pid_fin: +pid_fin.toFixed(1), altitude: +alt.toFixed(0), phase });
+  }
+  return data;
+}
+
+function loadCSV(text) {
+  const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
+  return parsed.data.filter(r => r.time != null);
+}
+
+function initWithData(data) {
+  flightData = data;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('file-prompt').classList.remove('show');
+  document.getElementById('hdr-time', `${data.length} pts`);
+  drawCharts();
+  updateMetrics();
+  initThree();
+  setPlayhead(0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// CHARTS
+// ═══════════════════════════════════════════════════════════
+const C = { bg:'#020408', panel:'#040d14', border:'#0a2a3a', glow:'#00e5ff', glow2:'#00ff88', danger:'#ff2244', pid:'#4488ff', ai:'#00ff88', roll:'#ff3355', alt:'#ffcc00', text:'#c8e8f0', muted:'#3a6070' };
+
+function resizeCanvas(canvas) {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+}
+
+function drawLineChart(canvas, datasets, opts={}) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const dpr = devicePixelRatio;
+  const pad = { t: 50*dpr, r: 20*dpr, b: 50*dpr, l: 60*dpr };
+  const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = C.panel;
+  ctx.fillRect(0, 0, W, H);
+
+  const times = flightData.map(d => d.time);
+  const tMin = times[0], tMax = times[times.length-1];
+  const toX = t => pad.l + (t - tMin) / (tMax - tMin) * cW;
+
+  const allVals = datasets.flatMap(ds => ds.values);
+  const vMin = opts.yMin !== undefined ? opts.yMin : Math.min(...allVals) * 1.1;
+  const vMax = opts.yMax !== undefined ? opts.yMax : Math.max(...allVals) * 1.1;
+  const toY = v => pad.t + (1 - (v - vMin) / (vMax - vMin)) * cH;
+
+  // Grid
+  ctx.strokeStyle = C.border; ctx.lineWidth = 1;
+  const ySteps = 6;
+  for (let i = 0; i <= ySteps; i++) {
+    const v = vMin + (vMax - vMin) * i / ySteps;
+    const y = toY(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cW, y); ctx.stroke();
+    ctx.fillStyle = C.muted; ctx.font = `${9*dpr}px "Share Tech Mono"`;
+    ctx.textAlign = 'right';
+    ctx.fillText(v.toFixed(0), pad.l - 6*dpr, y + 3*dpr);
+  }
+  const xSteps = 8;
+  for (let i = 0; i <= xSteps; i++) {
+    const t = tMin + (tMax - tMin) * i / xSteps;
+    const x = toX(t);
+    ctx.strokeStyle = C.border;
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + cH); ctx.stroke();
+    ctx.fillStyle = C.muted; ctx.textAlign = 'center';
+    ctx.fillText(`T+${t.toFixed(0)}s`, x, H - 16*dpr);
+  }
+
+  // Zero line
+  if (vMin < 0 && vMax > 0) {
+    const y0 = toY(0);
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
+    ctx.setLineDash([4*dpr, 4*dpr]);
+    ctx.beginPath(); ctx.moveTo(pad.l, y0); ctx.lineTo(pad.l+cW, y0); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Danger fill for roll rate
+  if (opts.dangerBand) {
+    const ds = datasets[0];
+    ctx.fillStyle = 'rgba(255,34,68,0.08)';
+    ctx.beginPath();
+    ctx.moveTo(toX(times[0]), toY(100));
+    for (let i=0;i<times.length;i++) if(ds.values[i]>100) { ctx.lineTo(toX(times[i]), toY(ds.values[i])); }
+    ctx.lineTo(toX(times[times.length-1]), toY(100)); ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(toX(times[0]), toY(-100));
+    for (let i=0;i<times.length;i++) if(ds.values[i]<-100) { ctx.lineTo(toX(times[i]), toY(ds.values[i])); }
+    ctx.lineTo(toX(times[times.length-1]), toY(-100)); ctx.closePath(); ctx.fill();
+  }
+
+  // Lines
+  datasets.forEach(ds => {
+    ctx.strokeStyle = ds.color;
+    ctx.lineWidth = ds.width * dpr || 2*dpr;
+    if (ds.dash) ctx.setLineDash(ds.dash.map(x=>x*dpr)); else ctx.setLineDash([]);
+    ctx.shadowColor = ds.color; ctx.shadowBlur = ds.glow ? 8*dpr : 0;
+    ctx.beginPath();
+    times.forEach((t, i) => {
+      const x = toX(t), y = toY(ds.values[i]);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]); ctx.shadowBlur = 0;
+  });
+
+  // Playhead
+  if (playhead >= 0 && playhead < times.length) {
+    const px = toX(times[playhead]);
+    ctx.strokeStyle = 'rgba(0,229,255,0.6)'; ctx.lineWidth = 1*dpr;
+    ctx.setLineDash([4*dpr,4*dpr]);
+    ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, pad.t+cH); ctx.stroke();
+    ctx.setLineDash([]);
+    // Dot on each line
+    datasets.forEach(ds => {
+      ctx.fillStyle = ds.color;
+      ctx.shadowColor = ds.color; ctx.shadowBlur = 10*dpr;
+      ctx.beginPath(); ctx.arc(px, toY(ds.values[playhead]), 4*dpr, 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
+    });
+  }
+
+  // Legend
+  let lx = pad.l;
+  datasets.forEach(ds => {
+    ctx.fillStyle = ds.color; ctx.shadowColor = ds.color; ctx.shadowBlur = 6*dpr;
+    ctx.fillRect(lx, 18*dpr, 20*dpr, 2*dpr);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = C.text; ctx.font = `${9*dpr}px "Share Tech Mono"`;
+    ctx.textAlign = 'left';
+    ctx.fillText(ds.label, lx + 24*dpr, 22*dpr);
+    lx += ctx.measureText(ds.label).width + 50*dpr;
+  });
+}
+
+function drawCharts() {
+  if (!flightData.length) return;
+
+  const c1 = document.getElementById('chart1');
+  const c2 = document.getElementById('chart2');
+
+  resizeCanvas(c1);
+  resizeCanvas(c2);
+
+  drawLineChart(c1, [
+    { label: 'Roll Rate (deg/s)', values: flightData.map(d=>d.roll_rate), color: C.roll, width:2, glow:true },
+    { label: 'AI Fin (°)', values: flightData.map(d=>d.ai_fin), color: C.ai, width:2.5, glow:true },
+    { label: 'PID Fin (°)', values: flightData.map(d=>d.pid_fin), color: C.pid, width:1.5, dash:[6,4] },
+  ], { yMin:-320, yMax:320, dangerBand:true });
+
+  drawLineChart(c2, [
+    { label: 'Altitude (m)', values: flightData.map(d=>d.altitude), color: C.alt, width:2, glow:true },
+    { label: 'AI Fin (°)', values: flightData.map(d=>d.ai_fin), color: C.ai, width:1.5 },
+  ], { yMin:0 });
+}
+
+function updateMetrics() {
+  if (!flightData.length) return;
+  const rolls = flightData.map(d=>d.roll_rate);
+  const ai = flightData.map(d=>d.ai_fin);
+  const pid = flightData.map(d=>d.pid_fin);
+
+  const sig = rolls.filter(r=>Math.abs(r)>5);
+  let dirAcc = 0;
+  rolls.forEach((r,i)=>{ if(Math.abs(r)>5 && Math.sign(ai[i]) !== Math.sign(r)) dirAcc++; });
+  dirAcc = sig.length ? (dirAcc/sig.length*100).toFixed(1) : 0;
+
+  let pidAgree = 0;
+  ai.forEach((a,i)=>{ if(Math.sign(a)===Math.sign(pid[i])) pidAgree++; });
+  pidAgree = (pidAgree/ai.length*100).toFixed(1);
+
+  const peakRoll = Math.max(...rolls.map(Math.abs)).toFixed(0);
+  const avgFin = (ai.reduce((s,v)=>s+Math.abs(v),0)/ai.length).toFixed(1);
+
+  document.getElementById('m-dir').textContent = dirAcc + '%';
+  document.getElementById('m-pid').textContent = pidAgree + '%';
+  document.getElementById('m-roll').textContent = peakRoll + '°/s';
+  document.getElementById('m-fin').textContent = avgFin + '°';
+  document.getElementById('m-dec').textContent = flightData.length;
+  document.getElementById('hdr-time').textContent = `${flightData.length} DATA PTS`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// PLAYBACK
+// ═══════════════════════════════════════════════════════════
+function setPlayhead(i) {
+  playhead = Math.max(0, Math.min(i, flightData.length-1));
+  const pct = flightData.length > 1 ? playhead / (flightData.length-1) * 100 : 0;
+  document.getElementById('tl-fill').style.width = pct + '%';
+  document.getElementById('tl-thumb').style.left = pct + '%';
+  if (flightData[playhead]) {
+    document.getElementById('time-display').textContent = `T+${flightData[playhead].time.toFixed(1)}s`;
+    updateRocket(flightData[playhead]);
+  }
+  drawCharts();
+}
+
+document.getElementById('play-btn').addEventListener('click', () => {
+  playing = !playing;
+  document.getElementById('play-btn').textContent = playing ? '⏸' : '▶';
+  if (playing) {
+    if (playhead >= flightData.length-1) setPlayhead(0);
+    playInterval = setInterval(() => {
+      if (playhead >= flightData.length-1) { playing=false; clearInterval(playInterval); document.getElementById('play-btn').textContent='▶'; return; }
+      setPlayhead(playhead+1);
+    }, 80);
+  } else {
+    clearInterval(playInterval);
+  }
+});
+
+document.getElementById('timeline').addEventListener('click', e => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  setPlayhead(Math.round(pct * (flightData.length-1)));
+});
+
+// ═══════════════════════════════════════════════════════════
+// THREE.JS 3D ROCKET
+// ═══════════════════════════════════════════════════════════
+let scene, camera, renderer, rocketGroup, exhaustParticles=[], exhaustSystem;
+let currentRoll = 0, targetRoll = 0;
+let thrustActive = false;
+let clock;
+
+function initThree() {
+  const canvas = document.getElementById('three-canvas');
+  const panel = document.getElementById('rocket-panel');
+  const W = panel.clientWidth, H = panel.clientHeight;
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x020408);
+  scene.fog = new THREE.FogExp2(0x020408, 0.04);
+
+  camera = new THREE.PerspectiveCamera(45, W/H, 0.1, 500);
+  camera.position.set(0, 2, 14);
+  camera.lookAt(0, 0, 0);
+
+  renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  clock = new THREE.Clock();
+
+  buildRocket();
+  buildEnvironment();
+  buildParticles();
+  animate3D();
+}
+
+function buildRocket() {
+  rocketGroup = new THREE.Group();
+
+  const mat = {
+    body:  new THREE.MeshStandardMaterial({ color:0x1a3a4a, metalness:0.9, roughness:0.1, envMapIntensity:1 }),
+    nose:  new THREE.MeshStandardMaterial({ color:0x0a1a24, metalness:0.95, roughness:0.05 }),
+    fin:   new THREE.MeshStandardMaterial({ color:0x00e5ff, metalness:0.8, roughness:0.2, emissive:0x002233, emissiveIntensity:0.5 }),
+    glow:  new THREE.MeshStandardMaterial({ color:0x00ff88, emissive:0x00ff88, emissiveIntensity:2, transparent:true, opacity:0.8 }),
+    nozzle:new THREE.MeshStandardMaterial({ color:0x0a0f14, metalness:1, roughness:0.05 }),
+    stripe:new THREE.MeshStandardMaterial({ color:0x00e5ff, emissive:0x00e5ff, emissiveIntensity:0.8, transparent:true, opacity:0.9 }),
+  };
+
+  // Body
+  const bodyGeo = new THREE.CylinderGeometry(0.38, 0.42, 5.5, 32);
+  const body = new THREE.Mesh(bodyGeo, mat.body);
+  body.castShadow = true;
+  rocketGroup.add(body);
+
+  // Nose cone
+  const noseGeo = new THREE.ConeGeometry(0.38, 2.2, 32);
+  const nose = new THREE.Mesh(noseGeo, mat.nose);
+  nose.position.y = 3.85;
+  rocketGroup.add(nose);
+
+  // Nosecone tip glow
+  const tipGeo = new THREE.SphereGeometry(0.06, 16, 16);
+  const tip = new THREE.Mesh(tipGeo, mat.glow);
+  tip.position.y = 4.92;
+  rocketGroup.add(tip);
+
+  // Stripes / markings
+  for (let i = 0; i < 3; i++) {
+    const sg = new THREE.CylinderGeometry(0.40, 0.40, 0.06, 32);
+    const s = new THREE.Mesh(sg, mat.stripe);
+    s.position.y = -1.2 + i * 1.1;
+    rocketGroup.add(s);
+  }
+
+  // AUTOCLAW text ring (simulate with thin ring)
+  const ringGeo = new THREE.TorusGeometry(0.42, 0.01, 8, 64);
+  const ring = new THREE.Mesh(ringGeo, mat.stripe);
+  ring.position.y = 1.0;
+  ring.rotation.x = Math.PI/2;
+  rocketGroup.add(ring);
+
+  // Fins (4)
+  const finShape = new THREE.Shape();
+  finShape.moveTo(0, 0);
+  finShape.lineTo(0, 1.5);
+  finShape.lineTo(-1.1, -0.8);
+  finShape.lineTo(-0.2, -0.8);
+  const finGeo = new THREE.ExtrudeGeometry(finShape, { depth:0.04, bevelEnabled:false });
+
+  for (let i = 0; i < 4; i++) {
+    const fin = new THREE.Mesh(finGeo, mat.fin);
+    fin.position.y = -2.4;
+    fin.position.x = 0.42 * Math.cos(i * Math.PI/2);
+    fin.position.z = 0.42 * Math.sin(i * Math.PI/2);
+    fin.rotation.y = -i * Math.PI/2;
+    fin.castShadow = true;
+    rocketGroup.add(fin);
+    fin.userData.isFin = true;
+    fin.userData.finIndex = i;
+  }
+
+  // Nozzle
+  const nozzleGeo = new THREE.CylinderGeometry(0.15, 0.28, 0.5, 24);
+  const nozzle = new THREE.Mesh(nozzleGeo, mat.nozzle);
+  nozzle.position.y = -3.05;
+  rocketGroup.add(nozzle);
+
+  // Engine glow
+  const engGeo = new THREE.SphereGeometry(0.22, 16, 16);
+  const engMat = new THREE.MeshStandardMaterial({ color:0xff6600, emissive:0xff4400, emissiveIntensity:3, transparent:true, opacity:0.9 });
+  const eng = new THREE.Mesh(engGeo, engMat);
+  eng.position.y = -3.35;
+  eng.name = 'engine';
+  rocketGroup.add(eng);
+
+  scene.add(rocketGroup);
+
+  // Point lights for dramatic effect
+  const pLight1 = new THREE.PointLight(0x00e5ff, 2, 8);
+  pLight1.position.set(2, 2, 2);
+  scene.add(pLight1);
+
+  const pLight2 = new THREE.PointLight(0x00ff88, 1.5, 6);
+  pLight2.position.set(-2, -1, 2);
+  scene.add(pLight2);
+
+  const engLight = new THREE.PointLight(0xff6600, 3, 5);
+  engLight.position.set(0, -3.5, 0);
+  engLight.name = 'engLight';
+  scene.add(engLight);
+}
+
+function buildEnvironment() {
+  // Star field
+  const starGeo = new THREE.BufferGeometry();
+  const starCount = 1200;
+  const positions = new Float32Array(starCount * 3);
+  for (let i=0; i<starCount*3; i++) positions[i] = (Math.random()-0.5)*200;
+  starGeo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+  const starMat = new THREE.PointsMaterial({ color:0xffffff, size:0.15, transparent:true, opacity:0.7 });
+  scene.add(new THREE.Points(starGeo, starMat));
+
+  // Ground grid (faint)
+  const gridHelper = new THREE.GridHelper(30, 30, 0x0a2a3a, 0x051015);
+  gridHelper.position.y = -7;
+  scene.add(gridHelper);
+
+  // Ambient
+  scene.add(new THREE.AmbientLight(0x020d18, 3));
+
+  // Hemisphere
+  scene.add(new THREE.HemisphereLight(0x0a2040, 0x000000, 1));
+}
+
+function buildParticles() {
+  // Exhaust particle system
+  const geo = new THREE.BufferGeometry();
+  const count = 200;
+  const positions = new Float32Array(count*3);
+  const velocities = [];
+  const lives = new Float32Array(count);
+
+  for (let i=0;i<count;i++) {
+    positions[i*3] = 0; positions[i*3+1] = -3.5; positions[i*3+2] = 0;
+    velocities.push({ x:(Math.random()-0.5)*0.1, y:-Math.random()*0.15-0.05, z:(Math.random()-0.5)*0.1 });
+    lives[i] = Math.random();
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+  const mat = new THREE.PointsMaterial({ color:0xff6600, size:0.12, transparent:true, opacity:0.7, vertexColors:false });
+  exhaustSystem = new THREE.Points(geo, mat);
+  exhaustSystem.name = 'exhaust';
+  scene.add(exhaustSystem);
+  exhaustParticles = { geo, velocities, lives, count };
+}
+
+function updateParticles(delta, isThrusting) {
+  if (!exhaustParticles.geo) return;
+  const pos = exhaustParticles.geo.attributes.position.array;
+  const vels = exhaustParticles.velocities;
+  const lives = exhaustParticles.lives;
+
+  for (let i=0;i<exhaustParticles.count;i++) {
+    lives[i] -= delta * (isThrusting ? 1.5 : 3);
+    if (lives[i] <= 0) {
+      pos[i*3] = rocketGroup.position.x + (Math.random()-0.5)*0.2;
+      pos[i*3+1] = rocketGroup.position.y - 3.4;
+      pos[i*3+2] = rocketGroup.position.z + (Math.random()-0.5)*0.2;
+      vels[i] = { x:(Math.random()-0.5)*0.08, y:-Math.random()*0.2-0.1, z:(Math.random()-0.5)*0.08 };
+      lives[i] = 1;
+    }
+    pos[i*3] += vels[i].x * delta * 60;
+    pos[i*3+1] += vels[i].y * delta * 60;
+    pos[i*3+2] += vels[i].z * delta * 60;
+  }
+  exhaustParticles.geo.attributes.position.needsUpdate = true;
+  exhaustSystem.material.opacity = isThrusting ? 0.7 : 0.2;
+  exhaustSystem.material.color.setHex(isThrusting ? 0xff6600 : 0x334455);
+}
+
+function updateRocket(row) {
+  if (!row) return;
+  targetRoll = (row.roll_rate || 0) * (Math.PI/180) * 0.05;
+
+  // Engine glow based on phase
+  const isAscent = row.phase === 'POWERED_ASCENT';
+  thrustActive = isAscent;
+  const eng = scene.getObjectByName('engine');
+  const engL = scene.getObjectByName('engLight');
+  if (eng) eng.material.emissiveIntensity = isAscent ? 4 : 0.5;
+  if (engL) engL.intensity = isAscent ? 4 : 0.3;
+
+  // Fin deflection visual
+  if (rocketGroup) {
+    rocketGroup.children.forEach(c => {
+      if (c.userData.isFin) {
+        const target = (row.ai_fin || 0) * (Math.PI/180) * 0.8;
+        c.rotation.y += (target - c.rotation.y) * 0.3;
+      }
+    });
+  }
+}
+
+function animate3D() {
+  requestAnimationFrame(animate3D);
+  if (!clock) return;
+  const delta = clock.getDelta();
+  const elapsed = clock.getElapsedTime();
+
+  // Smooth roll
+  currentRoll += (targetRoll - currentRoll) * 0.05;
+  if (rocketGroup) {
+    rocketGroup.rotation.z = currentRoll;
+    // Idle wobble
+    rocketGroup.rotation.x = Math.sin(elapsed * 0.5) * 0.03;
+    rocketGroup.rotation.y = elapsed * 0.15; // slow spin for drama
+  }
+
+  // Camera orbit
+  camera.position.x = Math.sin(elapsed * 0.2) * 12;
+  camera.position.z = Math.cos(elapsed * 0.2) * 12;
+  camera.lookAt(0, 0.5, 0);
+
+  updateParticles(delta, thrustActive);
+
+  // Pulsing engine light
+  const engL = scene.getObjectByName('engLight');
+  if (engL && thrustActive) engL.intensity = 3 + Math.sin(elapsed*20)*1;
+
+  renderer.render(scene, camera);
+}
+
+// ═══════════════════════════════════════════════════════════
+// FILE LOADING
+// ═══════════════════════════════════════════════════════════
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    document.getElementById('loading').style.display='none';
+    document.getElementById('file-prompt').classList.add('show');
+  }, 2000);
+});
+
+document.getElementById('file-drop').addEventListener('click', () => {
+  document.getElementById('csv-input').click();
+});
+
+document.getElementById('csv-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => initWithData(loadCSV(ev.target.result));
+  reader.readAsText(file);
+});
+
+document.getElementById('file-drop').addEventListener('dragover', e => { e.preventDefault(); e.currentTarget.style.background='rgba(0,229,255,0.1)'; });
+document.getElementById('file-drop').addEventListener('dragleave', e => { e.currentTarget.style.background=''; });
+document.getElementById('file-drop').addEventListener('drop', e => {
+  e.preventDefault(); e.currentTarget.style.background='';
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => initWithData(loadCSV(ev.target.result));
+  reader.readAsText(file);
+});
+
+document.getElementById('demo-btn').addEventListener('click', () => {
+  initWithData(generateDemoData());
+});
+
+window.addEventListener('resize', () => { drawCharts(); });
+</script>
+</body>
+</html>

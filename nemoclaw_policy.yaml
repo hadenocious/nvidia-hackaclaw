@@ -1,0 +1,117 @@
+# ============================================================
+# NEMOCLAW POLICY CONFIGURATION
+# AutoClaw — AI Rocket Flight Controller
+# NVIDIA Nemotron on ASUS Ascent GX10 (DGX Spark)
+# ============================================================
+
+agent:
+  name: AutoClaw
+  model: nemotron3:33b
+  inference: local          # runs on-device via Ollama, no cloud calls
+  version: "1.0.0"
+
+# ── WHAT THE AGENT IS ALLOWED TO DO ─────────────────────────
+permissions:
+  allowed_actions:
+    - read_sensor_data        # read roll rate, altitude, phase from simulation
+    - compute_fin_deflection  # output a single fin command value
+    - log_decision            # write decision to results.csv
+    - query_model             # call Nemotron via Ollama API
+
+  denied_actions:
+    - write_flight_software   # cannot modify flight code mid-mission
+    - override_abort_command  # cannot cancel a human-issued abort
+    - modify_policy           # cannot change its own rules
+    - external_network_calls  # all inference stays local, no cloud
+    - access_other_systems    # no filesystem access outside rocket_project/
+
+# ── HARD LIMITS (enforced in code, non-negotiable) ──────────
+constraints:
+  fin_deflection:
+    min_degrees: -15.0        # physical servo hard stop
+    max_degrees: 15.0         # physical servo hard stop
+    clamp_enforced: true      # parse_fin_deflection() clamps before output
+
+  response_timeout_seconds: 45   # request times out, fallback to pid_fin
+  fallback_on_timeout: pid_fin   # safe default — use PID value, not zero
+
+  inference_mode: blocking       # simulation waits for AI; no stale reads
+  output_format: single_number   # agent must return one number, nothing else
+
+# ── FLIGHT PHASE RULES ───────────────────────────────────────
+phase_policy:
+  PRE_LAUNCH:
+    action: hold              # no fin commands before launch
+    max_deflection: 0.0
+
+  POWERED_ASCENT:             # 0–2s, high roll, aggressive corrections needed
+    action: active
+    max_deflection: 15.0
+    correction_style: aggressive
+    notes: "React fast. Roll can exceed ±200°/s. Use full range."
+
+  COAST_ASCENT:               # 2–6s, roll settling
+    action: active
+    max_deflection: 15.0
+    correction_style: hold_trim
+    notes: "Hold near +11° trim. Small corrections only."
+
+  APOGEE:
+    action: active
+    max_deflection: 5.0
+    correction_style: gentle
+    notes: "Minimal authority. Preserve stability at peak altitude."
+
+  DESCENT:
+    action: active
+    max_deflection: 10.0
+    correction_style: moderate
+
+  LANDING:
+    action: minimal
+    max_deflection: 3.0
+
+# ── SAFETY TRIGGERS ─────────────────────────────────────────
+safety:
+  roll_rate_danger_threshold: 300   # deg/s — log as critical event
+  consecutive_parse_failures: 3     # after 3 bad responses, fall back to PID
+  anomaly_detection: true           # flag if AI output is always 0.0 (stuck)
+
+  human_override:
+    enabled: true
+    trigger: "Emergency Abort preset"
+    effect: immediate_halt_ai_commands
+
+# ── AUDIT & TRANSPARENCY ────────────────────────────────────
+audit:
+  log_every_decision: true
+  log_fields:
+    - time
+    - roll_rate_simulated
+    - ai_fin
+    - pid_fin
+    - phase
+    - confidence
+    - reasoning
+  output_path: "~/rocket_project/data/results.csv"
+  backup_on_overwrite: true        # saves results_TIMESTAMP.csv before each run
+
+# ── WHY NEMOTRON, NOT ANOTHER MODEL ─────────────────────────
+# NemoClaw uses NVIDIA Nemotron3:33B specifically because:
+#
+# 1. LOCAL INFERENCE — runs fully on DGX Spark via Ollama.
+#    No API keys, no latency, no data leaving the machine.
+#    Critical for real-time flight control (45s timeout, blocking).
+#
+# 2. REASONING QUALITY — Nemotron3 is a reasoning-class model.
+#    It can interpret physics rules and in-context training examples
+#    rather than pattern-matching to a memorized answer.
+#
+# 3. POLICY COMPLIANCE — the structured output format
+#    (FIN_DEFLECTION / CONFIDENCE / REASONING) is enforced by
+#    the system prompt. Nemotron follows it reliably at 33B scale.
+#    Smaller models (gemma4:26b) ignored the format and returned prose.
+#
+# 4. EXPLAINABILITY — every decision includes a REASONING field
+#    that references the training data pattern used. Judges and
+#    engineers can audit WHY each command was issued.
